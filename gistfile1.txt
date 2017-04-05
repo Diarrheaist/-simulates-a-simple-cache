@@ -1,0 +1,329 @@
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#define BLOCK_SIZE			16
+#define NUM_BLOCKS_IN_MEM	16
+#define NUM_BLOCKS_IN_CACHE	8
+#define ASSOCIATIVITY 		2
+#define NUM_SETS 			NUM_BLOCKS_IN_CACHE / ASSOCIATIVITY
+/**
+ * Represents a cache block
+ */
+typedef struct {
+	bool valid;
+	int set;
+	int tag;
+	char data[BLOCK_SIZE];	// char - one byte
+} block_t;
+
+/**
+ * Represents the cache as a whole
+ */
+typedef struct {
+	int read_misses;
+	int read_hits;
+	int write_misses;
+	int write_hits;
+	block_t blocks[NUM_SETS][ASSOCIATIVITY];
+} cache_t;
+
+cache_t cache;
+
+/**
+ * @global
+ * Structure to store the memory
+ */
+int memory[NUM_BLOCKS_IN_MEM][BLOCK_SIZE];
+
+/**
+ * Calculates the number of sets in the cache based on associativity
+ * @return number of sets in cache
+ */
+int calc_num_of_sets()
+{
+	return NUM_BLOCKS_IN_CACHE / ASSOCIATIVITY;
+}
+
+/**
+ * Calculates the set number to which a block belongs
+ * @param  block_num the index of the block
+ * @return             the set number to which block_num belongs
+ */
+int calc_set_num(int block_num)
+{
+	return block_num % calc_num_of_sets();
+}
+
+/**
+ * Print the performance of the cache
+ */
+void print_cache_performance()
+{
+	printf("===========Cache Performance===========\n");
+	printf("\tread misses = \t%d\n", cache.read_misses);
+	printf("\tread hits = \t%d\n", cache.read_hits);
+	printf("\twrite misses = \t%d\n", cache.write_misses);
+	printf("\twrite hits = \t%d\n", cache.write_hits);
+}
+
+/**
+ * Displays the cache in a readable format
+ */
+void print_cache()
+{
+	for(int k = 0; k < NUM_SETS; k++) {
+		for(int i = 0; i < ASSOCIATIVITY; i++) {
+			printf("Set = %d v = %d\t tag = %d \t \t", k, cache.blocks[k][i].valid, cache.blocks[k][i].tag);
+			for(int j = 0; j < BLOCK_SIZE; j++)
+				printf("%d ", cache.blocks[k][i].data[j]);
+			printf("\n");
+		}
+	}
+}
+
+/**
+ * Displays the contents of the memory in a readable format
+ */
+void print_mem()
+{
+	for(int i = 0; i < NUM_BLOCKS_IN_MEM; i++) {
+		for(int j = 0; j < BLOCK_SIZE; j++)
+			printf("%5d ", memory[i][j]);
+		printf("\n");
+	}
+}
+
+/**
+ * Initializes the cache
+ */
+void init_cache()
+{
+	int num_sets = calc_num_of_sets();
+	
+	for(int k = 0; k < NUM_SETS; k++) {
+		for(int i = 0; i < ASSOCIATIVITY; i++) {
+			cache.blocks[k][i].set = k;
+			cache.blocks[k][i].valid = 0;
+			cache.blocks[k][i].tag = -99;
+
+			for(int j = 0; j < BLOCK_SIZE; j++)
+				cache.blocks[k][i].data[j] = 0;
+		}
+	}
+}
+
+/**
+ * Zeros out the memory
+ */
+void init_mem()
+{
+	for(int i = 0; i < NUM_BLOCKS_IN_MEM; i++) {
+		for(int j = 0; j < BLOCK_SIZE; j++) {
+			memory[i][j] = 10*i + j;
+		}
+	}
+}
+
+/**
+ * Calculates the index of the cache block that is to be replaced
+ * @param  block_num block number of the block in memory
+ * @return           index of the cache block to be replaced
+ */
+int map_mem_block_to_cacheline_for_replacement(int block_num)
+{
+	int set_num = calc_set_num(block_num);
+
+	for(int i = 0; i < ASSOCIATIVITY; i++) {
+		if(cache.blocks[set_num][i].valid == 0) {
+			return i;
+		}
+	
+	}
+
+	int randint = rand() % ASSOCIATIVITY;
+	return randint;
+}
+
+/**
+ * Write a value to the cache
+ * @param block_num The block number where the change is to be made
+ * @param offset    The offset in the block
+ * @param value     The new value
+ */
+void write_to_cache(int block_num, int offset, int value)
+{
+	int set_num = calc_set_num(block_num);
+	int idx = -1;
+	for(int i = 0; i < ASSOCIATIVITY; i++) {
+		if(cache.blocks[set_num][i].tag == block_num)
+			idx = i;
+	}
+	if(idx == -1)
+	{
+		printf("Fatal Error: Can't find the block in cache.\n");
+		exit(1);
+	}
+	cache.blocks[set_num][idx].data[offset] = value;
+}
+
+/**
+ * Loads a whole block and places it into the cache. 
+ * @param block_num The block to be loaded
+ */
+void load_from_mem(int block_num)
+{
+	int victim = map_mem_block_to_cacheline_for_replacement(block_num);
+	int set_num = calc_set_num(block_num);
+	cache.blocks[set_num][victim].tag = block_num;
+	cache.blocks[set_num][victim].valid = 1;
+	for(int i = 0; i < BLOCK_SIZE; i++) {
+		cache.blocks[set_num][victim].data[i] = memory[block_num][i];
+	}
+}
+
+/**
+ * Writes a whole block to the memory
+ * @param block_num The block to be written
+ */
+void write_through_to_mem(int block_num)
+{
+	int cache_idx = -1;
+	int set_num = calc_set_num(block_num);
+	for(int i = 0; i < ASSOCIATIVITY; i++) {
+		if(cache.blocks[set_num][i].tag == block_num) {
+			cache_idx = i;
+			break;
+		}
+	}
+	if(cache_idx == -1) {
+		printf("Error - writing to the memory before loading it in cache.\n");
+		return;
+	}
+
+	for(int i = 0; i < BLOCK_SIZE; i++)
+		memory[block_num][i] = cache.blocks[set_num][cache_idx].data[i];
+}
+
+/**
+ * Check if it's a hit or miss
+ * @param  block_num The block to be checked for
+ * @return           0 if miss. 1 if hit.
+ */
+int is_cache_hit(int block_num)
+{
+	int set_num = calc_set_num(block_num);
+	for(int i = 0; i < ASSOCIATIVITY; i++) {
+		if(cache.blocks[set_num][i].tag == block_num && cache.blocks[set_num][i].valid == 1)
+			return 1;
+	}
+	return 0;
+}
+
+/**
+ * Stores a single value to the memory
+ * @param block_num the block to be updated
+ * @param offset    the offset of the byte to be updated
+ * @param value     the new value
+ */
+void store_to_mem(int block_num, int offset, int value)
+{
+	memory[block_num][offset] = value;
+}
+
+void handle_read()
+{
+	int block_num;
+	int offset;
+
+	printf("Enter block number: ");
+	scanf("%d", &block_num);
+
+	printf("Enter offset: ");
+	scanf("%d", &offset);
+
+	if(is_cache_hit(block_num))
+	{
+		cache.read_hits++;
+	}
+	else
+	{
+		cache.read_misses++;
+		load_from_mem(block_num);
+	}
+//	print_mem();
+//	print_cache();
+}
+
+void handle_write()
+{
+	int block_num;
+	int offset;
+	int value;
+
+	printf("Enter block number: ");
+	scanf("%d", &block_num);
+
+	printf("Enter offset: ");
+	scanf("%d", &offset);
+
+	printf("Enter value: ");
+	scanf("%d", &value);
+
+	if(is_cache_hit(block_num))
+	{
+		cache.write_hits++;
+		write_to_cache(block_num, offset, value);
+		write_through_to_mem(block_num);
+	}
+	else
+	{
+		cache.write_misses++;
+		load_from_mem(block_num);
+		write_to_cache(block_num, offset, value);
+		write_through_to_mem(block_num);
+	}
+//	print_mem();
+//	print_cache();
+}
+
+int main()
+{
+	printf("Program to simulate a 2-way set associative.\n");
+	printf("Number of blocks in the cache: %d\n", NUM_BLOCKS_IN_CACHE);
+	printf("Set associativity of this cache: 2\n");
+	printf("Number of sets in this cache: %d\n", NUM_SETS);
+
+	init_cache();
+	init_mem();
+
+	char cmd[100];
+	while(1)
+	{
+		print_cache_performance();
+		print_cache();
+		print_mem();
+		
+		printf("Enter command (read/write/quit): ");
+		scanf("%s", cmd);
+
+		if(!strcmp(cmd, "read"))
+		{
+			handle_read();
+		}
+		else if(!strcmp(cmd, "write"))
+		{
+			handle_write();
+		}
+		else if(!strcmp(cmd, "quit"))
+		{
+			printf("Bye!");
+			return 0;
+		}
+		else
+		{
+			printf("Bad command. Only 'read' or 'write' or 'quit' allowed.\n");
+		}
+	}
+	return 0;
+}
